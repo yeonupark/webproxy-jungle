@@ -6,9 +6,10 @@
 #define MAX_OBJECT_SIZE 102400 // max object size
 
 void doit(int fd);
-void parse_uri(char *uri, char *hostname, char *pathname, char *port);
+void parse_uri(char *uri, char *hostname, char *port, char *path);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 void read_requesthdrs(rio_t *rp);
+void *thread(void *vargp);
 
 /* You won't lose style points for including this long line in your code */
 static const char *user_agent_hdr =
@@ -17,10 +18,12 @@ static const char *user_agent_hdr =
 
 int main(int argc, char **argv) {
 
-    int listenfd, clientfd; // server file descripter & client file descripter
+    int listenfd, *clientfd; // server file descripter & client file descripter
     char hostname[MAXLINE], port[MAXLINE]; // hostname and port num of client
     socklen_t clientlen; // size of client address struct
     struct sockaddr_storage clientaddr; // client address struct
+
+    pthread_t tid; // thread ID of peer thread
 
     /* Check command-line args */
     if (argc != 2) {
@@ -31,12 +34,21 @@ int main(int argc, char **argv) {
     listenfd = Open_listenfd(argv[1]); // opening a listening socket
     while (1) {
         clientlen = sizeof(clientaddr);
-        clientfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // acceptig a connection request
-        Getnameinfo((SA *) &clientaddr, clientlen, hostname, MAXLINE, port, MAXLINE, 0); // converting socketaddr to form that is available to read
-        printf("Accepted connection from (%s, %s)\n", hostname, port);
-        doit(clientfd); // performing a transaction
-        Close(clientfd); // closing its end of the connection
+        clientfd = Malloc(sizeof(int)); // assign each fd to its own dynamically allocated memory blocks
+        *clientfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // acceptig a connection request
+        pthread_create(&tid, NULL, thread, clientfd); // creating a peer thread to handle the request
     }
+}
+
+void *thread(void *vargp) {
+    int connfd = *((int *)vargp); 
+
+    pthread_detach(pthread_self()); // detach each thread so that its memory resources will be reclaimed when it terminates 
+    Free(vargp); // free the memory block that was allocated by the main thread
+
+    doit(connfd); 
+    Close(connfd); // 
+    return NULL;
 }
 
 /* handle one HTTP transaction. */
@@ -133,7 +145,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
     char buf[MAXLINE], body[MAXBUF];
 
     /* Build the HTTP response body */
-    sprintf(body, "<html><title>Proxy Error</title>"); // start line of HTML page
+    sprintf(body, "<html><title>Proxy Error</title>"); // first line of HTML page
     sprintf(body, "%s<body bgcolor=""ffffff"">\r\n", body); // background color
     sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg); // error num and short msg
     sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause); // cause of error
